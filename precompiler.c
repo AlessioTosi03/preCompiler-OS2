@@ -71,6 +71,32 @@ static size_t split_lines(char *text, char ***out) {
     return n;
 }
 
+static void add_err(Errs *a, int line, const char *fmt, ...) {
+    if (a->n == a->cap && !grow((void **)&a->e, &a->cap, sizeof *a->e)) return;
+    char tmp[256];
+    va_list ap; va_start(ap, fmt); vsnprintf(tmp, sizeof tmp, fmt, ap); va_end(ap);
+    a->e[a->n].line = line;
+    a->e[a->n].msg = xstrdup(tmp);
+    ++a->n;
+}
+
+static void add_var(Vars *a, const char *name, int line, int ok_name, int ok_type) {
+    if (a->n == a->cap && !grow((void **)&a->v, &a->cap, sizeof *a->v)) return;
+    a->v[a->n++] = (Var){ xstrdup(name), line, ok_name, ok_type, 0 };
+}
+
+static int typeish_first_word(const char *s, Strs *types) {
+    while (isspace((unsigned char)*s)) ++s;
+    if (!*s || *s == '{' || *s == '}') return 0;
+    if (!strncmp(s, "typedef", 7) && !is_ident_char((unsigned char)s[7])) return 1;
+    char word[64]; size_t n = 0;
+    while (*s && !is_ident_start((unsigned char)*s)) { if (*s == ';') return 0; ++s; }
+    while (is_ident_char((unsigned char)*s) && n + 1 < sizeof word) word[n++] = *s++;
+    word[n] = 0;
+    if (!word[0]) return 0;
+    return has_type(types, word) || !strcmp(word, "auto") || !strcmp(word, "register") || !strcmp(word, "static") || !strcmp(word, "extern") || !strcmp(word, "inline") || !strcmp(word, "const") || !strcmp(word, "volatile") || !strcmp(word, "restrict") || is_kw(word);
+}
+
 static int valid_type_prefix(const char *prefix, Strs *types) {
     char tmp[128];
     size_t n = 0;
@@ -117,20 +143,6 @@ static void strip_comments(char *s, int *block) {
     *w = 0;
 }
 
-static void add_err(Errs *a, int line, const char *fmt, ...) {
-    if (a->n == a->cap && !grow((void **)&a->e, &a->cap, sizeof *a->e)) return;
-    char tmp[256];
-    va_list ap; va_start(ap, fmt); vsnprintf(tmp, sizeof tmp, fmt, ap); va_end(ap);
-    a->e[a->n].line = line;
-    a->e[a->n].msg = xstrdup(tmp);
-    ++a->n;
-}
-
-static void add_var(Vars *a, const char *name, int line, int ok_name, int ok_type) {
-    if (a->n == a->cap && !grow((void **)&a->v, &a->cap, sizeof *a->v)) return;
-    a->v[a->n++] = (Var){ xstrdup(name), line, ok_name, ok_type, 0 };
-}
-
 static int line_ends_semicolon(const char *s) { size_t n = strlen(s); while (n && isspace((unsigned char)s[n - 1])) --n; return n && s[n - 1] == ';'; }
 
 static void parse_decl(char *line, int line_no, Strs *types, Vars *vars, Errs *errs) {
@@ -167,6 +179,27 @@ static void parse_decl(char *line, int line_no, Strs *types, Vars *vars, Errs *e
     }
 }
 
+static void mark_used(char *line, Vars *vars) {
+    strip_strings(line);
+    for (char *p = line; *p; ++p) {
+        if (!is_ident_start((unsigned char)*p)) continue;
+        char *s = p++;
+        while (is_ident_char((unsigned char)*p)) ++p;
+        char save = *p;
+        *p = 0;
+        for (size_t i = 0; i < vars->n; ++i) if (vars->v[i].ok_name && !strcmp(vars->v[i].name, s)) vars->v[i].used = 1;
+        *p = save;
+        --p;
+    }
+}
+
+static int decl_candidate(const char *s, Strs *types) {
+    while (isspace((unsigned char)*s)) ++s;
+    if (!*s || *s == '{' || *s == '}') return 0;
+    if (!strncmp(s, "typedef", 7) && !is_ident_char((unsigned char)s[7])) return 1;
+    return typeish_first_word(s, types);
+}
+
 int precompiler_run(const char *input_path, const char *output_path, int verbose) {
     char *text = read_all(input_path);
     if (!text) { fprintf(stderr, "Errore: impossibile leggere il file di input.\n"); return 1; }
@@ -182,6 +215,7 @@ int precompiler_run(const char *input_path, const char *output_path, int verbose
     Vars vars = {0}; Errs errs = {0}; Strs types = {0};
     int block = 0;
 
+    // picks up all lines before the main function and checks for typedefs and variable declarations
     for (int i = 0; i < m; ++i) {
         char *dup = xstrdup(lines[i]);
         strip_comments(dup, &block);
@@ -198,4 +232,28 @@ int precompiler_run(const char *input_path, const char *output_path, int verbose
         }
         free(dup);
     }
+
+    // picks up all lines after the main function and checks for variable declarations and usage
+    int in_decl = 1;
+    for (size_t i = (size_t)m + 1; i < line_count; ++i) {
+        char *dup = xstrdup(lines[i]);
+        strip_comments(dup, &block);
+        char *line = trim(dup);
+        if (!*line || !strcmp(line, "{") || !strcmp(line, "}")) { free(dup); continue; }
+        if (in_decl && decl_candidate(line, &types) && line_ends_semicolon(line)) parse_decl(line, (int)i + 1, &types, &vars, &errs);
+        else in_decl = 0;
+        free(dup);
+    }
+
+    // marks all variables that are used in the code after the main function
+    for (size_t i = 0; i < line_count; ++i) {
+        int decl_line = 0;
+        for (size_t j = 0; j < vars.n; ++j) if ((int)i + 1 == vars.v[j].line) { decl_line = 1; break; }
+        if (decl_line) continue;
+        char *dup = xstrdup(lines[i]);
+        strip_comments(dup, &block);
+        mark_used(dup, &vars);
+        free(dup);
+    }
+
 }
