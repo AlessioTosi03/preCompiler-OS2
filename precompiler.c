@@ -200,6 +200,75 @@ static int decl_candidate(const char *s, Strs *types) {
     return typeish_first_word(s, types);
 }
 
+static void generate_report(const char *input_path, const char *output_path, int verbose, Vars *vars, Errs *errs) {
+    int invalid_names_count = 0;
+    int invalid_types_count = 0;
+    int unused_vars_count = 0;
+
+    for (size_t i = 0; i < vars->n; ++i) {
+        if (!vars->v[i].ok_name) invalid_names_count++;
+        if (!vars->v[i].ok_type) invalid_types_count++;
+        if (!vars->v[i].used) {
+            unused_vars_count++;
+            add_err(errs, vars->v[i].line, "unused variable: %s", vars->v[i].name);
+        }
+    }
+
+    Buf report = {0};
+#define PRINT_REP(...) do { \
+        char _tmp[512]; \
+        int _len = snprintf(_tmp, sizeof _tmp, __VA_ARGS__); \
+        if (_len > 0) { \
+            while (report.len + (size_t)_len + 1 > report.cap) grow((void**)&report.buf, &report.cap, 1); \
+            memcpy(report.buf + report.len, _tmp, (size_t)_len); \
+            report.len += (size_t)_len; \
+            report.buf[report.len] = 0; \
+        } \
+    } while(0)
+
+    PRINT_REP("=== MYPRECOMPILER PROCESSING STATISTICS ===\n");
+    PRINT_REP("Analyzed file: %s\n", input_path);
+    PRINT_REP("Total variables checked: %d\n", (int)vars->n);
+    PRINT_REP("Total errors detected: %d\n", (int)errs->n);
+    PRINT_REP(" - Invalid variable names: %d\n", invalid_names_count);
+    PRINT_REP(" - Invalid data types: %d\n", invalid_types_count);
+    PRINT_REP(" - Unused variables: %d\n\n", unused_vars_count);
+
+    PRINT_REP("--- DETECTED ERRORS LIST ---\n");
+    if (errs->n == 0) {
+        PRINT_REP("No errors found.\n");
+    } else {
+        for (size_t i = 0; i < errs->n; ++i) {
+            PRINT_REP("[Line %d] Error: %s\n", errs->e[i].line, errs->e[i].msg);
+        }
+    }
+
+    if (report.buf) {
+        if (output_path) {
+            FILE *out_f = fopen(output_path, "w");
+            if (out_f) { fputs(report.buf, out_f); fclose(out_f); }
+        }
+
+        if (verbose || !output_path) {
+            fputs(report.buf, stdout);
+        }
+    }
+
+
+    free(report.buf);
+}
+
+static void free_resources(char **lines, size_t line_count, Vars *vars, Errs *errs, Strs *types) {
+    for (size_t i = 0; i < line_count; ++i) free(lines[i]);
+    free(lines);
+    for (size_t i = 0; i < vars->n; ++i) free (vars->v[i].name);
+    free(vars->v);
+    for (size_t i = 0; i < errs->n; ++i) free (errs->e[i].msg);
+    free(errs->e);
+    for (size_t i = 0; i < types->n; ++i) free (types->s[i]);
+    free(types->s);
+}
+
 int precompiler_run(const char *input_path, const char *output_path, int verbose) {
     char *text = read_all(input_path);
     if (!text) { fprintf(stderr, "Errore: impossibile leggere il file di input.\n"); return 1; }
@@ -216,6 +285,7 @@ int precompiler_run(const char *input_path, const char *output_path, int verbose
     int block = 0;
 
     // picks up all lines before the main function and checks for typedefs and variable declarations
+    block = 0;
     for (int i = 0; i < m; ++i) {
         char *dup = xstrdup(lines[i]);
         strip_comments(dup, &block);
@@ -234,6 +304,7 @@ int precompiler_run(const char *input_path, const char *output_path, int verbose
     }
 
     // picks up all lines after the main function and checks for variable declarations and usage
+    block =0;
     int in_decl = 1;
     for (size_t i = (size_t)m + 1; i < line_count; ++i) {
         char *dup = xstrdup(lines[i]);
@@ -246,6 +317,7 @@ int precompiler_run(const char *input_path, const char *output_path, int verbose
     }
 
     // marks all variables that are used in the code after the main function
+    block = 0;
     for (size_t i = 0; i < line_count; ++i) {
         int decl_line = 0;
         for (size_t j = 0; j < vars.n; ++j) if ((int)i + 1 == vars.v[j].line) { decl_line = 1; break; }
@@ -255,5 +327,10 @@ int precompiler_run(const char *input_path, const char *output_path, int verbose
         mark_used(dup, &vars);
         free(dup);
     }
+
+    generate_report(input_path, output_path, verbose, &vars, &errs);
+    free_resources(lines, line_count, &vars, &errs, &types);
+
+    return 0;
 
 }
