@@ -6,12 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { char *name; int line, ok_name, ok_type, used; } Var;
-typedef struct { char *msg; int line; } Err;
-typedef struct { Var *v; size_t n, cap; } Vars;
-typedef struct { Err *e; size_t n, cap; } Errs;
-typedef struct { char **s; size_t n, cap; } Strs;
-typedef struct { char *buf; size_t len, cap; } Buf;
+
 
 static char *xstrdup(const char *s) { size_t n = strlen(s) + 1; char *p = malloc(n); if (p) memcpy(p, s, n); return p; }
 
@@ -65,7 +60,7 @@ static char *read_all(const char *path) {
     if (fseek(f, 0, SEEK_SET) != 0) {
         fprintf(stderr, "Failed to seek back the start of file '%s'.\n", path);
         fclose(f);
-        return NULL:
+        return NULL;
     }
     char *b = malloc((size_t)n + 1);
     if (!b) {
@@ -87,7 +82,8 @@ static char *read_all(const char *path) {
 
 static size_t split_lines(char *text, char ***out) {
     char **lines = NULL;
-    size_t n = 0, cap = 0;
+    size_t n = 0;
+    size_t cap = 0;
     char *start = text;
     for (char *p = text; ; ++p) {
         if (*p == '\n' || *p == '\0') {
