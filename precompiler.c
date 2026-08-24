@@ -42,13 +42,45 @@ static int is_kw(const char *s) {
 
 static char *read_all(const char *path) {
     FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    if (!f){
+        fprintf(stderr, "Can't open input file '%s'.\n", path);
+        return NULL;
+    };
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fprintf(stderr, "Failed to seek the end of file '%s'.\n", path);
+        fclose(f);
+        return NULL;
+    }
     long n = ftell(f);
-    if (n <= 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    if (n < 0) {
+        fprintf(stderr, "Failed to determine file size for '%s'.\n", path);
+        fclose(f);
+        return NULL;
+    }
+    if (n==0) {
+        fprintf(stderr, "File '%s' is empty.\n", path);
+        fclose(f);
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "Failed to seek back the start of file '%s'.\n", path);
+        fclose(f);
+        return NULL:
+    }
     char *b = malloc((size_t)n + 1);
-    if (!b) { fclose(f); return NULL; }
-    if (fread(b, 1, (size_t)n, f) != (size_t)n || fclose(f) != 0) { free(b); return NULL; }
+    if (!b) {
+        fprintf(stderr, "Failed to allocate memory for '%s'.\n", path);
+        fclose(f);
+        return NULL;
+    }
+    if (fread(b, 1, (size_t)n, f) != (size_t)n) {
+        fprintf(stderr, "Failed to read file '%s'.\n", path);
+        free(b);
+        return NULL;
+    }
+    if (fclose(f) != 0) {
+        fprintf(stderr, "Failed to close input file '%s'.\n", path);
+    }
     b[n] = 0;
     return b;
 }
@@ -230,7 +262,7 @@ static void mark_used(char *line, Vars *vars) {
         char *s=p;
 
         //advance until the end of the identifier
-        while (*p && !is_ident_char((unsigned char)*p)) ++p;
+        while (*p && is_ident_char((unsigned char)*p)) ++p;
 
         // Temporarily null-terminate the string token
         char save = *p;
@@ -301,7 +333,16 @@ static void generate_report(const char *input_path, const char *output_path, int
     if (report.buf) {
         if (output_path) {
             FILE *out_f = fopen(output_path, "w");
-            if (out_f) { fputs(report.buf, out_f); fclose(out_f); }
+            if (!out_f) {
+                fprintf(stderr, "Could not open output file: %s\n", output_path);
+            } else {
+                if (fputs(report.buf, out_f) == EOF) {
+                    fprintf(stderr, "Could not write to output file: %s\n", output_path);
+                }
+                if (fclose(out_f) !=0) {
+                    fprintf(stderr, "Could not close output file: %s\n", output_path);
+                }
+            }
         }
 
         if (verbose || !output_path) {
