@@ -20,11 +20,13 @@ Compile the project using gcc with standard C99 flags:
 
 ```bash
 gcc -Wall -Wextra -std=c99 main.c precompiler.c -o myPreCompiler
+```
 Usage
 Run the compiled executable with the input source file:
 
-Bash
+```bash
 ./myPreCompiler [options] <input_file.c>
+```
 Options
 -v, --verbose: Displays processing statistics and error report directly in standard output (stdout).
 
@@ -33,9 +35,9 @@ Options
 ##Example Commands
 Print report directly to the terminal:
 
-Bash
+```Bash
 ./myPreCompiler -v test_4.c
-
+```
 
 ##Output Structure
 The program outputs processing statistics followed by a detailed list of detected errors:
