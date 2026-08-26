@@ -620,6 +620,7 @@ static void mark_all_used(char **lines, size_t line_count, Vars *vars) {
     }
 }
 
+
 //Main execution entry point for precompiler validation logic
 int precompiler_run(const char *input_path, const char *output_path, int verbose) {
     char *text = read_all(input_path);
