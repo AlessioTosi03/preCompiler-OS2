@@ -7,9 +7,10 @@
 #include <string.h>
 
 
-
+//Safe string duplication wrapper
 static char *xstrdup(const char *s) { size_t n = strlen(s) + 1; char *p = malloc(n); if (p) memcpy(p, s, n); return p; }
 
+//Dynamically grows dynamic array buffers (2x capacity growth strategy)
 static int grow(void **ptr, size_t *cap, size_t elem) {
     size_t next = *cap ? *cap * 2 : 8;
     void *tmp = realloc(*ptr, next * elem);
@@ -19,22 +20,30 @@ static int grow(void **ptr, size_t *cap, size_t elem) {
     return 1;
 }
 
+//Appends a unique custom type identifier to the collection
 static void push_type(Strs *a, const char *s) {
     for (size_t i = 0; i < a->n; ++i) if (!strcmp(a->s[i], s)) return;
     if (a->n == a->cap && !grow((void **)&a->s, &a->cap, sizeof *a->s)) return;
     a->s[a->n++] = xstrdup(s);
 }
 
-static int has_type(const Strs *a, const char *s) { for (size_t i = 0; i < a->n; ++i) if (!strcmp(a->s[i], s)) return 1; return 0; }
+//Checks if a character can start a C identifier
 static int is_ident_start(int c) { return isalpha(c) || c == '_'; }
+
+//Checks if a character is valid within a C identifier
 static int is_ident_char(int c) { return isalnum(c) || c == '_'; }
+
+//Trims leading and trailing whitespace characters in-space
 static char *trim(char *s) { while (isspace((unsigned char)*s)) ++s; char *e = s + strlen(s); while (e > s && isspace((unsigned char)e[-1])) --e; *e = 0; return s; }
+
+//Checks if a given string matches standard C keywords
 static int is_kw(const char *s) {
     static const char *k[] = {"auto","break","case","char","const","continue","default","do","double","else","enum","extern","float","for","goto","if","inline","int","long","register","restrict","return","short","signed","sizeof","static","struct","switch","typedef","union","unsigned","void","volatile","while","_Bool","_Complex","_Imaginary"};
     for (size_t i = 0; i < sizeof k / sizeof *k; ++i) if (!strcmp(s, k[i])) return 1;
     return 0;
 }
 
+//Reads the entire contents of a file into a dynamically allocated buffer
 static char *read_all(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f){
@@ -81,6 +90,7 @@ static char *read_all(const char *path) {
     return b;
 }
 
+//Splits full raw source code text into an array of individual line strings
 static size_t split_lines(char *text, char ***out) {
     char **lines = NULL;
     size_t n = 0;
@@ -100,6 +110,7 @@ static size_t split_lines(char *text, char ***out) {
     return n;
 }
 
+//Add an error entry to the error collection list
 static void add_err(Errs *a, int line, const char *msg) {
     if (!a || !msg) return;
     if (a->n == a->cap && !grow((void **)&a->e, &a->cap, sizeof(*a->e))) {
@@ -110,35 +121,13 @@ static void add_err(Errs *a, int line, const char *msg) {
     a->n++;
 }
 
+//Records a parsed variable alongside validation state flags
 static void add_var(Vars *a, const char *name, int line, int ok_name, int ok_type) {
     if (a->n == a->cap && !grow((void **)&a->v, &a->cap, sizeof *a->v)) return;
     a->v[a->n++] = (Var){ xstrdup(name), line, ok_name, ok_type, 0 };
 }
 
-static int typeish_first_word(const char *s, Strs *types) {
-    while (isspace((unsigned char)*s)) ++s;
-    if (!*s || *s == '{' || *s == '}') return 0;
-    if (!strncmp(s, "typedef", 7) && !is_ident_char((unsigned char)s[7])) return 1;
-    char word[64]; size_t n = 0;
-    while (*s && !is_ident_start((unsigned char)*s)) { if (*s == ';') return 0; ++s; }
-    while (is_ident_char((unsigned char)*s) && n + 1 < sizeof word) word[n++] = *s++;
-    word[n] = 0;
-    if (!word[0]) return 0;
-    return has_type(types, word) || !strcmp(word, "auto") || !strcmp(word, "register") || !strcmp(word, "static") || !strcmp(word, "extern") || !strcmp(word, "inline") || !strcmp(word, "const") || !strcmp(word, "volatile") || !strcmp(word, "restrict") || is_kw(word);
-}
-
-static int valid_type_prefix(const char *prefix, Strs *types) {
-    char tmp[128];
-    size_t n = 0;
-    for (const char *p = prefix; *p && n + 1 < sizeof tmp; ++p) if (*p != '*' && !isspace((unsigned char)*p)) tmp[n++] = *p;
-    tmp[n] = 0;
-    if (!tmp[0]) return 0;
-    if (has_type(types, tmp)) return 1;
-    if (!strcmp(tmp, "int") || !strcmp(tmp, "char") || !strcmp(tmp, "float") || !strcmp(tmp, "double") || !strcmp(tmp, "void") || !strcmp(tmp, "_Bool")) return 1;
-    if (!strcmp(tmp, "signed") || !strcmp(tmp, "unsigned") || !strcmp(tmp, "short") || !strcmp(tmp, "long") || !strcmp(tmp, "longlong") || !strcmp(tmp, "signedint") || !strcmp(tmp, "unsignedint")) return 1;
-    return !is_kw(tmp);
-}
-
+//Extracts the rightmost C identifier token from a given string fragment
 static int extract_name(const char *s, char *name, size_t cap, size_t *pos) {
     size_t end = strlen(s);
     while (end && isspace((unsigned char)s[end - 1])) --end;
@@ -154,14 +143,17 @@ static int extract_name(const char *s, char *name, size_t cap, size_t *pos) {
     return 1;
 }
 
+//Locates the zero-based index of the main function signature
 static int find_main(char **lines, size_t n) {
     for (size_t i = 0; i < n; ++i) {
-        char *m = strstr(lines[i], "main");
-        if (m && (m == lines[i] || !is_ident_char((unsigned char)m[-1])) && !is_ident_char((unsigned char)m[4])) return (int)i;
+        if (strstr(lines[i], "main")) {
+            return (int)i;
+        }
     }
     return -1;
 }
 
+//Strips single.line (//) and multiline (/* */) comments while maintaining state
 static void strip_comments(char *s, int *block) {
     char *r = s, *w = s;
     while (*r) {
@@ -173,106 +165,201 @@ static void strip_comments(char *s, int *block) {
     *w = 0;
 }
 
-static int line_ends_semicolon(const char *s) { size_t n = strlen(s); while (n && isspace((unsigned char)s[n - 1])) --n; return n && s[n - 1] == ';'; }
+//Verifies if a code statement terminates with a semicolon
+static int line_ends_semicolon(const char *s) {
+    size_t n = strlen(s);
+    while (n && isspace((unsigned char)s[n - 1])) --n;
+    return n && s[n - 1] == ';';
+}
 
+//Split a declaration statement into type specifiers and variable list segments
 static size_t split_decl_parts(char *line, char **parts, size_t max_parts) {
     size_t pc = 0;
-    int depth = 0;
-    char *start = line;
+    line = trim(line);
 
-    for (char *p = line; ; ++p) {
-        if (*p == '(' || *p == '[') {
-            ++depth;
-        } else if (*p == ')' || *p == ']') {
-            --depth;
+    char *p = line;
+    while (*p && !isspace((unsigned char)*p)) ++p;
+
+    char first_word[64] = {0};
+    size_t len = p - line;
+    if (len < sizeof(first_word)) {
+        strncpy(first_word, line, len);
+        first_word[len] = '\0';
+    }
+
+    //Handle compound multi-word types
+    if (strcmp(first_word, "unsigned") == 0 || strcmp(first_word, "signed") == 0 ||
+        strcmp(first_word, "long") == 0 || strcmp(first_word, "short") == 0) {
+        while (*p && isspace((unsigned char)*p)) ++p;
+        while (*p && !isspace((unsigned char)*p)) ++p;
         }
 
+    if (*p) {
+        *p = '\0';
+        parts[pc++] = trim(line);
+        p++;
+    } else {
+        return 0;
+    }
+
+
+    char *start = p;
+    int depth = 0;
+    for (;; ++p) {
+        if (*p == '(' || *p == '[') ++depth;
+        else if (*p == ')' || *p == ']') --depth;
+
         if ((*p == ',' && !depth) || !*p) {
-            if (pc < max_parts) {
-                *p = 0;
-                parts[pc++] = trim(start);
+            char saved = *p;
+            *p = '\0';
+            char *trimmed = trim(start);
+            if (*trimmed && pc < max_parts) {
+                parts[pc++] = trimmed;
             }
+            if (!saved) break;
             start = p + 1;
-            if (!*p) break;
         }
     }
     return pc;
 }
 
+//Validates whether a given string follows C variable naming conventions
+static int is_valid_c_identifier(const char *s) {
+    if (!s || !*s) return 0;
+
+
+    if (!isalpha((unsigned char)s[0]) && s[0] != '_') return 0;
+
+
+    for (size_t i = 1; s[i] != '\0'; ++i) {
+        if (!isalnum((unsigned char)s[i]) && s[i] != '_') return 0;
+    }
+
+    return 1;
+}
+
+//Process individual variable names, stripping initializers and indirection dereferences
 static void process_decl_vars(char **parts, size_t pc, int ok_type, Vars *vars, Errs *errs, int line_no) {
-    char name[64];
-    for (size_t i = 0; i < pc; ++i) {
-        int valid_name = extract_name(parts[i], name, sizeof(name), NULL) && !is_kw(name);
-        const char *var_name = name[0] ? name : "<invalid>";
+    for (size_t i = 1; i < pc; ++i) {
+        char *raw_name = trim(parts[i]);
+
+        //Strip inline initialization assignments
+        char *eq = strchr(raw_name, '=');
+        if (eq) *eq = '\0';
+        raw_name = trim(raw_name);
+
+        //Strip leading pointer dereference operators
+        while (*raw_name == '*') {
+            raw_name++;
+            raw_name = trim(raw_name);
+        }
+
+        int valid_name = is_valid_c_identifier(raw_name) && !is_kw(raw_name);
 
         if (!valid_name) {
             char err_msg[256];
-            snprintf(err_msg, sizeof(err_msg), "variable identifier not valid: %s", var_name);
+            snprintf(err_msg, sizeof(err_msg), "variable identifier not valid: %s", raw_name);
             add_err(errs, line_no, err_msg);
-            add_var(vars, var_name, line_no, 0, ok_type);
-        } else {
-            add_var(vars, name, line_no, 1, ok_type);
         }
+
+        add_var(vars, raw_name, line_no, valid_name, ok_type);
     }
 }
 
-static void parse_decl(char *line, int line_no, Strs *types, Vars *vars, Errs *errs) {
-    char *semi = strrchr(line, ';');
-    if (semi) *semi = 0;
-    line = trim(line);
+//Lookup table for built-in primitive C data types and combinations
+int is_builtin_type(const char *type) {
+    static const char *types[] = {
+        "int", "char", "float", "double", "void",
+        "short", "long", "signed", "unsigned",
+        "unsigned int", "signed int",
+        "short int", "unsigned short", "unsigned short int",
+        "long int", "signed long", "unsigned long", "unsigned long int",
+        "long long", "long long int", "unsigned long long",
+        "float", "double", "long double",
+        NULL
+    };
 
+    for (int i = 0; types[i] != NULL; ++i) {
+        if (strcmp(types[i], type) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+//Parses and validates a line recognized as a variable declaration statement
+static void parse_decl(char *line, int line_no, Strs *types, Vars *vars, Errs *errs) {
+    line = trim(line);
     if (!*line || !strncmp(line, "typedef", 7)) return;
+    if (strstr(line, "+=") || strstr(line, "-=") || strstr(line, "*=") || strstr(line, "/=")) return;
+    if (strncmp(line, "for", 3) == 0 || strncmp(line, "while", 5) == 0 || strncmp(line, "if", 2) == 0) return;
+    if (strncmp(line, "return", 6) == 0) return;
+
+    char *semi = strrchr(line, ';');
+    if (!semi) return;
+    *semi = 0;
+    line = trim(line);
 
     char *parts[32];
     size_t pc = split_decl_parts(line, parts, 32);
+    if (pc < 2) return;
 
-    char name[64];
-    size_t pos = 0;
-    if (!extract_name(parts[0], name, sizeof(name), &pos)) {
-        add_err(errs, line_no, "variable identifier not valid");
-        add_var(vars, "<invalid>", line_no, 0, 0);
-        return;
+    char *trimmed_type = parts[0];
+
+    for (size_t i = 0; i < vars->n; ++i) {
+        if (strcmp(vars->v[i].name, trimmed_type) == 0) return;
     }
 
-    char prefix[128];
-    snprintf(prefix, sizeof(prefix), "%.*s", (int)pos, parts[0]);
-    int ok_type = valid_type_prefix(prefix, types);
+    int is_known = is_builtin_type(trimmed_type);
+    if (!is_known && types) {
+        for (size_t i = 0; i < types->n; ++i) {
+            if (strcmp(types->s[i], trimmed_type) == 0) {
+                is_known = 1;
+                break;
+            }
+        }
+    }
+
+    int ok_type = is_known;
 
     if (!ok_type) {
         char err_msg[256];
-        snprintf(err_msg, sizeof(err_msg), "Type not valid: %s", prefix);
+        snprintf(err_msg, sizeof(err_msg), "Type not valid: %s", trimmed_type);
         add_err(errs, line_no, err_msg);
     }
+
 
     process_decl_vars(parts, pc, ok_type, vars, errs, line_no);
 }
 
+//Replaces double and single quote contents with whitespace to prevent false positive symbol tracking
 static void strip_strings(char *s) {
     int in_str=0;
     int in_char=0;
 
     for (char *p = s; *p; ++p) {
-        //toggle string literal context (double quotes) if not inside a character literal
+        //toggle string literal context (double quotes)
         if (*p == '"' && !in_char) {
             in_str = !in_str;
             *p = ' ';
             continue;
         }
 
-        //toggle character literal context (single quotes) if not inside a character literal
+        //toggle character literal context (single quotes)
         if (*p == '\'' && !in_str) {
             in_char = !in_char;
             *p= ' ';
             continue;
         }
 
-        //mark content inside literals with spaces to prevent false matches
+        //mark content inside string or character literals
         if (in_str || in_char) {
             *p = ' ';
         }
     }
 }
 
+//Verifiers token occurrences against declared identifiers and marks used variables
 static void check_and_mark_var(const char *name, Vars *vars) {
     if (is_kw(name)) return;
 
@@ -284,6 +371,7 @@ static void check_and_mark_var(const char *name, Vars *vars) {
     }
 }
 
+//Scans executionable expressions to mark declared variables as used
 static void mark_used(char *line, Vars *vars) {
     strip_strings(line);
 
@@ -308,13 +396,31 @@ static void mark_used(char *line, Vars *vars) {
     }
 }
 
+//Evaluates whether a line structure fits candidate criteria for variable declarations
 static int decl_candidate(const char *s, Strs *types) {
+    (void)types;
     while (isspace((unsigned char)*s)) ++s;
     if (!*s || *s == '{' || *s == '}') return 0;
-    if (!strncmp(s, "typedef", 7) && !is_ident_char((unsigned char)s[7])) return 1;
-    return typeish_first_word(s, types);
+
+    // ignore core control flow structure statements
+    if (!strncmp(s, "return", 6) && !is_ident_char((unsigned char)s[6])) return 0;
+    if (!strncmp(s, "if", 2) && !is_ident_char((unsigned char)s[2])) return 0;
+    if (!strncmp(s, "while", 5) && !is_ident_char((unsigned char)s[5])) return 0;
+    if (!strncmp(s, "for", 3) && !is_ident_char((unsigned char)s[3])) return 0;
+
+    // Must contain at least two words roken prior to a semicolon or assignment operator
+    int words = 0, in_word = 0;
+    for (const char *p = s; *p && *p != ';' && *p != '='; ++p) {
+        if (!isspace((unsigned char)*p)) {
+            if (!in_word) { in_word = 1; words++; }
+        } else {
+            in_word = 0;
+        }
+    }
+    return words >= 2;
 }
 
+//Safely appends formatted text into the dynamic report output buffer
 static int report_append_str(Buf *b, const char *str) {
     if (!str) return 0;
     size_t len = strlen(str);
@@ -331,6 +437,7 @@ static int report_append_str(Buf *b, const char *str) {
     return 1;
 }
 
+//Writes generated summary reports to an output file or standard output streams
 static void write_report_output(const char *output_path, int verbose, const char *text) {
     if (output_path) {
         FILE *out_f = fopen(output_path, "w");
@@ -351,26 +458,29 @@ static void write_report_output(const char *output_path, int verbose, const char
     }
 }
 
+//Builds analysis metric summaries and formats total error logs
 static void generate_report(const char *input_path, const char *output_path, int verbose, Vars *vars, Errs *errs) {
     int invalid_names_count = 0;
     int invalid_types_count = 0;
     int unused_vars_count = 0;
     char line_buf[512];
 
-        for (size_t i = 0; i < vars->n; ++i) {
-            if (!vars->v[i].ok_name) {
-                invalid_names_count++;
-            }
-            if (!vars->v[i].ok_type) {
-                invalid_types_count++;
-            }
-            if (!vars->v[i].used) {
-                unused_vars_count++;
-                char err_msg[256];
-                snprintf(err_msg, sizeof(err_msg), "unused variable: %s", vars->v[i].name);
-                add_err(errs, vars->v[i].line, err_msg);
-            }
+    for (size_t i = 0; i < vars->n; ++i) {
+        if (!vars->v[i].ok_name) {
+            invalid_names_count++;
         }
+        if (!vars->v[i].ok_type) {
+            invalid_types_count++;
+        }
+
+        //Flag variables that are fully valid but left unreferenced
+        if (vars->v[i].ok_name && vars->v[i].ok_type && !vars->v[i].used) {
+            unused_vars_count++;
+            char err_msg[256];
+            snprintf(err_msg, sizeof(err_msg), "unused variable: %s", vars->v[i].name);
+            add_err(errs, vars->v[i].line, err_msg);
+        }
+    }
 
     Buf report = {0};
 
@@ -411,6 +521,7 @@ static void generate_report(const char *input_path, const char *output_path, int
     free(report.buf);
 }
 
+//Deallocates all dynamic structures, string references and container buffers
 static void free_resources(char **lines, size_t line_count, Vars *vars, Errs *errs, Strs *types) {
     for (size_t i = 0; i < line_count; ++i) free(lines[i]);
     free(lines);
@@ -422,6 +533,7 @@ static void free_resources(char **lines, size_t line_count, Vars *vars, Errs *er
     free(types->s);
 }
 
+//Parses custom type alias declarations definied via typedef statements
 static void parse_typedef(const char *line, Strs *types) {
     char *dup = xstrdup(line);
     char *semi = strrchr(dup, ';');
@@ -438,6 +550,7 @@ static void parse_typedef(const char *line, Strs *types) {
     free(dup);
 }
 
+//Analyzes global definitions and declarations located above the main entry point
 static void parse_pre_main(char **lines, int m, Strs *types, Vars *vars, Errs *errs) {
     int block = 0;
     for (int i = 0; i < m; ++i) {
@@ -460,19 +573,26 @@ static void parse_pre_main(char **lines, int m, Strs *types, Vars *vars, Errs *e
     }
 }
 
+//Analyzes local declarations enclosed inside or placed below the main entry point
 static void parse_post_main(char **lines, size_t line_count, int m, Strs *types, Vars *vars, Errs *errs) {
     int block = 0;
-    int in_decl = 1;
-    for (size_t i = (size_t)m + 1; i < line_count; ++i) {
+    size_t start_index = (m >= 0) ? (size_t)m + 1 : 0;
+
+    for (size_t i = start_index; i < line_count; ++i) {
         char *dup = xstrdup(lines[i]);
         strip_comments(dup, &block);
         char *line = trim(dup);
 
+        // skip structural braces or empty statements
         if (*line && strcmp(line, "{") != 0 && strcmp(line, "}") != 0) {
-            if (in_decl && decl_candidate(line, types) && line_ends_semicolon(line)) {
+            // Stop parsing local declarations once return statements is hit
+            if (!strncmp(line, "return", 6) && !is_ident_char((unsigned char)line[6])) {
+                free(dup);
+                break;
+            }
+
+            if (line_ends_semicolon(line) && decl_candidate(line, types)) {
                 parse_decl(line, (int)i + 1, types, vars, errs);
-            } else {
-                in_decl = 0;
             }
         }
 
@@ -480,6 +600,7 @@ static void parse_post_main(char **lines, size_t line_count, int m, Strs *types,
     }
 }
 
+//Traverses all non-declaration lines to mark referenced variables as active
 static void mark_all_used(char **lines, size_t line_count, Vars *vars) {
     int block = 0;
     for (size_t i = 0; i < line_count; ++i) {
@@ -499,10 +620,11 @@ static void mark_all_used(char **lines, size_t line_count, Vars *vars) {
     }
 }
 
+//Main execution entry point for precompiler validation logic
 int precompiler_run(const char *input_path, const char *output_path, int verbose) {
     char *text = read_all(input_path);
     if (!text) {
-        fprintf(stderr, "Can't read the file in input.\n");
+        fprintf(stderr, "Can't read input file.\n");
         return 1;
     }
 
@@ -517,7 +639,7 @@ int precompiler_run(const char *input_path, const char *output_path, int verbose
 
     int m = find_main(lines, line_count);
     if (m < 0) {
-        fprintf(stderr, "Can't fine the main function.\n");
+        fprintf(stderr, "Can't find the main function.\n");
         free_resources(lines, line_count, NULL, NULL, NULL);
         return 1;
     }
